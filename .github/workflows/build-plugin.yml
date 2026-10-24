@@ -1,0 +1,25 @@
+name: Build PSP plugin
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/pspdev/pspdev:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar
+        run: make
+
+      - name: Armar carpeta del plugin
+        run: |
+          mkdir -p out/stickflechas
+          cp stickflechas.prx plugin.ini out/stickflechas/
+
+      - name: Subir resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: stickflechas-plugin
+          path: out
