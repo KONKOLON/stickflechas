@@ -7,8 +7,30 @@
 #include <pspkernel.h>
 #include <pspctrl.h>
 #include <pspdisplay.h>
+#include <pspiofilemgr.h>
+#include <stdio.h>
+#include <string.h>
 
 PSP_MODULE_INFO("StickFlechas", 0, 1, 0);
+
+// Registro de depuracion: se escribe en PSP/stickflechas.log (solo las primeras lineas).
+// Si el juego se cierra, la ultima linea del archivo dice hasta donde llego el plugin.
+#define LOG_ENABLED 1
+static int logLines = 0;
+static void logf_(const char *fmt, int a, int b, int c) {
+#if LOG_ENABLED
+	if (logLines >= 12)
+		return;
+	logLines++;
+	char buf[128];
+	int n = snprintf(buf, sizeof(buf), fmt, a, b, c);
+	SceUID fd = sceIoOpen("ms0:/PSP/stickflechas.log", PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0777);
+	if (fd >= 0) {
+		sceIoWrite(fd, buf, n);
+		sceIoClose(fd);
+	}
+#endif
+}
 
 // ---- Ajustes (cambialos y vuelve a compilar) ----
 #define SCREEN_W      480
@@ -60,24 +82,48 @@ static void draw_arrow(void *fb, int bufw, int fmt, int cx, int cy, int dx, int 
 	}
 }
 
-int main(int argc, char **argv) {
-	// Esperar un poco a que el juego arranque.
-	sceKernelDelayThread(3 * 1000 * 1000);
+// Comprueba que el framebuffer cae por completo dentro de VRAM o RAM de usuario.
+static int fb_is_valid(unsigned int addr, int bufw, int fmt) {
+	if (bufw < SCREEN_W || bufw > 1024)
+		return 0;
+	if (fmt < 0 || fmt > 3)
+		return 0;
+	unsigned int bytes = (unsigned int)bufw * SCREEN_H * (fmt == PSP_DISPLAY_PIXEL_FORMAT_8888 ? 4 : 2);
+	if (addr >= 0x04000000 && addr + bytes <= 0x04200000)
+		return 1;  // VRAM
+	if (addr >= 0x08800000 && addr + bytes <= 0x0A000000)
+		return 1;  // RAM de usuario
+	return 0;
+}
 
+int main(int argc, char **argv) {
+	logf_("plugin iniciado\n", 0, 0, 0);
+
+	// Esperar un poco a que el juego arranque.
+	sceKernelDelayThread(5 * 1000 * 1000);
+	logf_("fin de la espera\n", 0, 0, 0);
+
+	int frame = 0;
+	int drawn = 0;
 	while (1) {
 		sceDisplayWaitVblankStart();
+		frame++;
 
 		SceCtrlData pad;
 		if (sceCtrlPeekBufferPositive(&pad, 1) < 1)
 			continue;
+		if (frame == 1)
+			logf_("control leido: Lx=%d Ly=%d\n", pad.Lx, pad.Ly, 0);
 
 		void *fb = 0;
 		int bufw = 0, fmt = 0;
 		sceDisplayGetFrameBuf(&fb, &bufw, &fmt, PSP_DISPLAY_SETBUF_IMMEDIATE);
-		if (!fb || bufw <= 0)
+		if (frame == 1)
+			logf_("framebuffer: dir=%08x bufw=%d fmt=%d\n", (int)fb, bufw, fmt);
+		if (!fb || !fb_is_valid((unsigned int)fb, bufw, fmt))
 			continue;
-		// Direccion sin cache para que se vea al instante.
-		fb = (void *)((unsigned int)fb | 0x40000000);
+		if (frame == 1)
+			logf_("framebuffer valido, a dibujar\n", 0, 0, 0);
 
 		int ax = (int)pad.Lx - 128;
 		int ay = (int)pad.Ly - 128;  // en la PSP, Ly crece hacia abajo
@@ -93,6 +139,10 @@ int main(int argc, char **argv) {
 				draw_arrow(fb, bufw, fmt, x, y, dirX[i], dirY[i], ARROW_SIZE_ON, 64, 224, 255);
 			else
 				draw_arrow(fb, bufw, fmt, x, y, dirX[i], dirY[i], ARROW_SIZE, 90, 90, 90);
+		}
+		if (!drawn) {
+			drawn = 1;
+			logf_("primer dibujo terminado\n", 0, 0, 0);
 		}
 	}
 	return 0;
